@@ -14,8 +14,7 @@
       {
         "title": "NiloShift",
         "width": 1200,
-        "height": 700,
-        "devtools": true
+        "height": 700
       }
     ],
     "security": {

@@ -178,7 +178,6 @@ pub async fn start_import_command(
                 let _ = fs::create_dir_all(p);
             }
             let mut outfile = fs::File::create(&outpath).map_err(|e| e.to_string())?;
-            // schnellerer Copy-Buffer (io::copy ist bereits effizient; belassen, aber Kommentar zeigt Intent)
             io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
         }
         processed += 1;
