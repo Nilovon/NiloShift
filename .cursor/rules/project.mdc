@@ -1,0 +1,97 @@
+# Cursor AI Rules für das Projekt "NiloShift"
+
+## 1. Projektübersicht
+
+NiloShift ist eine Desktop-Anwendung für Windows, die mit Tauri entwickelt wird. Ihr Zweck ist die Vereinfachung der Migration von Benutzerdaten von einem alten auf einen neuen PC. Das Tool richtet sich an IT-Dienstleister und Systemadministratoren.
+
+Das Kernkonzept besteht aus zwei Modi:
+1.  **Exporter:** Läuft auf dem alten PC, sammelt ausgewählte Benutzerdaten (Desktop, Dokumente, Browser-Profile etc.), komprimiert und verschlüsselt sie in eine einzige `.nilo`-Paketdatei.
+2.  **Importer:** Läuft auf dem neuen PC, liest die `.nilo`-Datei ein, entschlüsselt sie mit einem vom Benutzer vergebenen Passwort und stellt die Daten an den korrekten Orten im neuen Benutzerprofil wieder her.
+
+## 2. Technologie-Stack
+
+-   **Framework:** Tauri (Rust Backend, Web-Frontend)
+-   **Backend-Sprache:** Rust (aktuelle Stable Edition)
+-   **Frontend-Framework:** Next.js 14+ (App Router) mit React & TypeScript
+-   **UI-Komponenten:** shadcn/ui
+-   **Styling:** Tailwind CSS
+-   **Datenbank/ORM (für zukünftige Web-Features):** Prisma
+-   **API-Layer (für zukünftige Web-Features):** tRPC
+
+## 3. Architektur
+
+-   Die Anwendung folgt dem Tauri-Modell: Ein Rust-Core-Prozess (Backend) verwaltet die Systeminteraktionen und stellt eine WebView für die Benutzeroberfläche bereit.
+-   **Kommunikation:** Die Frontend-UI (Next.js/React) kommuniziert mit dem Rust-Backend ausschließlich über die von Tauri bereitgestellte `invoke`-API.
+-   **Backend-Logik (Rust):**
+    -   Rust-Funktionen, die vom Frontend aufgerufen werden können, müssen mit `#[tauri::command]` annotiert werden.
+    -   Alle systemnahen Operationen (Dateizugriff, Prozessprüfung, Komprimierung, Verschlüsselung) finden im Rust-Code statt.
+    -   Fehlerbehandlung in Rust erfolgt konsequent über `Result<T, E>`, wobei der `Err`-Teil in einen `String` umgewandelt wird, der an das Frontend zurückgegeben werden kann.
+-   **Frontend-Logik (TypeScript):**
+    -   Die UI ist in wiederverwendbare React-Komponenten unterteilt, die mit `shadcn/ui` erstellt werden.
+    -   Zustandsverwaltung erfolgt mit React Hooks (`useState`, `useContext`, etc.).
+    -   Aufrufe an das Backend sind asynchron (`async/await`) und in `try...catch`-Blöcke gekapselt, um Fehler aus dem Rust-Backend abzufangen und in der UI anzuzeigen.
+
+## 4. Dateistruktur
+
+-   **Frontend-Code:** Befindet sich im Verzeichnis `/src`. Dies ist eine Standard-Next.js-Anwendung.
+-   **Backend-Code:** Befindet sich im Verzeichnis `/src-tauri`. Der Haupt-Code liegt in `/src-tauri/src/main.rs` und kann in weitere Module aufgeteilt werden (z.B. `exporter.rs`, `importer.rs`, `crypto.rs`).
+
+## 5. Coding-Richtlinien & Best Practices
+
+-   **Allgemein:** Der Code wird mit Prettier (Print Width: 80) formatiert.
+-   **Frontend (TypeScript/React):**
+    -   Schreibe ausschließlich funktionale Komponenten mit Hooks.
+    -   Verwende striktes TypeScript. `any` ist zu vermeiden. Definiere klare Typen und Interfaces für Props und API-Antworten.
+    -   Für UI-Elemente, nutze `shadcn/ui` Komponenten, wo immer es möglich ist. Passe sie bei Bedarf an, aber erfinde das Rad nicht neu.
+    -   Styling erfolgt primär über Tailwind CSS Utility-Klassen.
+    -   Beispiel für einen Backend-Aufruf:
+        ```typescript
+        import { invoke } from "@tauri-apps/api/tauri";
+
+        async function handleImport(filePath: string, pass: string) {
+          try {
+            await invoke("start_import_command", {
+              packagePath: filePath,
+              password: pass,
+            });
+            // UI aktualisieren (Erfolg)
+          } catch (error) {
+            // UI aktualisieren (Fehler anzeigen)
+            console.error("Import fehlgeschlagen:", error);
+          }
+        }
+        ```
+-   **Backend (Rust):**
+    -   Verwende `async fn` für alle `#[tauri::command]`-Funktionen, die I/O-Operationen durchführen, um die UI nicht zu blockieren.
+    -   Nutze empfohlene Crates für spezifische Aufgaben:
+        -   **Benutzerordner:** `dirs` oder `known_folders` für plattformunabhängige Pfade (`C:\Users\<Username>`).
+        -   **Archivierung:** `zip-rs` zum Erstellen von ZIP-Archiven.
+        -   **Verschlüsselung:** `aes-gcm` für starke AES-256-Verschlüsselung.
+    -   Gib klare und verständliche Fehlermeldungen aus dem `Result::Err` zurück. Beispiel: `Err("Der Browser 'Chrome' wird noch ausgeführt. Bitte schließen Sie ihn.".to_string())`.
+
+## 6. Kernfunktionalitäten (MVP)
+
+-   **Exporter-Logik (Rust):**
+    -   Identifiziere Benutzerordner (Desktop, Dokumente, etc.).
+    -   Identifiziere Browser-Profilordner (Chrome, Edge, Firefox).
+    -   Prüfe, ob Browser-Prozesse laufen, und gib ggf. einen Fehler zurück.
+    -   Kopiere ausgewählte Daten in ein temporäres Verzeichnis.
+    -   Komprimiere dieses Verzeichnis in eine ZIP-Datei.
+    -   Verschlüssele die ZIP-Datei mit einem benutzerdefinierten Passwort (AES-256-GCM).
+-   **Importer-Logik (Rust):**
+    -   Entschlüssele die `.nilo`-Datei mit dem Passwort.
+    -   Entpacke das Archiv in ein temporäres Verzeichnis.
+    -   Ermittle den Home-Ordner des aktuellen Benutzers auf dem neuen System.
+    -   Kopiere die Daten an die korrekten Zielorte und überschreibe ggf. vorhandene Dateien.
+-   **UI (Next.js):**
+    -   Ein Assistenten-Flow, der den Benutzer durch den Export- oder Importprozess führt.
+    -   Klare Checkboxen zur Auswahl der zu migrierenden Daten.
+    -   Sichere Passworteingabe mit Bestätigungsfeld.
+    -   Fortschrittsanzeigen und klares Feedback über Erfolg oder Misserfolg.
+
+## 7. Sicherheit
+
+-   **Priorität 1:** Die Sicherheit der Benutzerdaten ist oberstes Gebot.
+-   Die Verschlüsselung des Migrationspakets ist **nicht optional**.
+-   Verwende einen etablierten, sicheren Verschlüsselungsalgorithmus wie AES-256-GCM.
+-   Das Passwort darf **niemals** unverschlüsselt gespeichert oder übertragen werden. Es wird nur im Speicher für den Ver- und Entschlüsselungsvorgang gehalten.
