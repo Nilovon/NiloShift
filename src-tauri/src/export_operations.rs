@@ -316,8 +316,9 @@ async fn create_zip_archive_with_progress(
     let file = fs::File::create(zip_path)
         .map_err(|e| format!("Fehler beim Erstellen der ZIP-Datei: {}", e))?;
     let mut zip = ZipWriter::new(file);
+    // Performance: keine Kompression, nur Archivierung (schneller, kleinere CPU-Last)
     let options = FileOptions::default()
-        .compression_method(CompressionMethod::Deflated)
+        .compression_method(CompressionMethod::Stored)
         .unix_permissions(0o755);
     add_dir_to_zip_progress(
         &mut zip, source_dir, "", &options, app, start, processed, total,
