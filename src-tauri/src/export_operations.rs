@@ -369,14 +369,19 @@ fn add_dir_to_zip_progress<W: Write + io::Seek>(
         } else {
             zip.start_file(&zip_path, *options)
                 .map_err(|e| format!("Fehler Datei {}: {}", zip_path, e))?;
-            let content = match fs::read(&path) {
-                Ok(c) => c,
-                Err(_) => {
-                    continue;
+            // Stream-basiertes Kopieren in den ZIP, um RAM zu sparen
+            let mut infile = match fs::File::open(&path) { Ok(f) => f, Err(_) => continue };
+            let mut buffer = [0u8; 1024 * 1024]; // 1MB Buffer
+            loop {
+                match std::io::Read::read(&mut infile, &mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        zip.write_all(&buffer[..n])
+                            .map_err(|e| format!("Fehler Schreiben {}: {}", zip_path, e))?;
+                    }
+                    Err(_) => break,
                 }
-            };
-            zip.write_all(&content)
-                .map_err(|e| format!("Fehler Schreiben {}: {}", zip_path, e))?;
+            }
             *processed = processed.saturating_add(1);
             emit_progress(app, start, *processed, total, "Packen");
         }
