@@ -64,6 +64,25 @@ fn emit_progress(
     );
 }
 
+fn emit_progress_percent(
+    app: &tauri::AppHandle,
+    start: Instant,
+    percent: f32,
+    phase: &'static str,
+) {
+    let elapsed = start.elapsed().as_millis() as u64;
+    let _ = app.emit(
+        "export-progress",
+        ProgressPayload {
+            percent,
+            eta_ms: elapsed.saturating_div(2), // grobe Heuristik
+            phase,
+            processed: 0,
+            total: 0,
+        },
+    );
+}
+
 #[tauri::command]
 pub async fn start_export_command(
     app: tauri::AppHandle,
@@ -217,9 +236,17 @@ pub async fn start_export_command(
     create_zip_archive_with_progress(&temp_dir, &zip_path, &app, start, &mut processed, total_ops)
         .await?;
 
-    // 3) Verschlüsseln (kleiner Schritt)
-    emit_progress(&app, start, processed, total_ops, "Verschlüsseln");
-    encrypt_file(&zip_path, &output_path, &password).await?;
+    // 3) Verschlüsseln (kleiner Schritt, aber kann bei großen Dateien dauern)
+    encrypt_file(
+        &zip_path,
+        &output_path,
+        &password,
+        &app,
+        start,
+        &mut processed,
+        total_ops,
+    )
+    .await?;
     processed = total_ops; // Fertig
     emit_progress(&app, start, processed, total_ops, "Fertig");
 
@@ -237,25 +264,44 @@ fn is_symlink(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "windows")]
+fn is_reparse_point(path: &Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    fs::symlink_metadata(path)
+        .map(|m| (m.file_attributes() & 0x400) != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_reparse_point(_path: &Path) -> bool { false }
+
+fn should_skip_name(lower: &str) -> bool {
+    if lower == "node_modules" || lower.starts_with("cache") || lower == "temp" || lower == "tmp" {
+        return true;
+    }
+    // Windows typische Junction-Schleifen in Benutzerprofilen
+    let l = lower;
+    l == "application data" || l == "local settings" || l == "recent" || l == "sendto" || l == "start menu" || l == "templates" || l == "cookies" || l == "nethood" || l == "printhood"
+}
+
 fn count_dir_files(dir: &Path) -> u64 {
-    if !dir.exists() || is_symlink(dir) {
+    if !dir.exists() || is_symlink(dir) || is_reparse_point(dir) {
         return 0;
     }
     let mut cnt = 0u64;
-    let it = match fs::read_dir(dir) {
-        Ok(i) => i,
-        Err(_) => return 0,
-    };
-    for e in it {
-        if let Ok(e) = e {
+    let mut stack: Vec<PathBuf> = Vec::new();
+    stack.push(dir.to_path_buf());
+    while let Some(current) = stack.pop() {
+        let it = match fs::read_dir(&current) { Ok(i) => i, Err(_) => continue };
+        for e in it {
+            let e = match e { Ok(x) => x, Err(_) => continue };
             let p = e.path();
-            if is_symlink(&p) {
-                continue;
-            }
+            let name_lower = e.file_name().to_string_lossy().to_ascii_lowercase();
+            if is_symlink(&p) || is_reparse_point(&p) || should_skip_name(&name_lower) { continue; }
             if p.is_dir() {
-                cnt += count_dir_files(&p);
+                stack.push(p);
             } else {
-                cnt += 1;
+                cnt = cnt.saturating_add(1);
             }
         }
     }
@@ -273,33 +319,32 @@ fn copy_directory_with_progress(
     if !src.exists() || is_symlink(src) {
         return Ok(());
     }
-    if let Err(e) = fs::create_dir_all(dst) {
-        eprintln!("Warnung: {}", e);
-    }
-    let it = match fs::read_dir(src) {
-        Ok(i) => i,
-        Err(_) => return Ok(()),
-    };
-    for e in it {
-        let e = match e {
-            Ok(x) => x,
-            Err(_) => continue,
-        };
-        let sp = e.path();
-        let dp = dst.join(e.file_name());
-        if is_symlink(&sp) {
+    let mut stack: Vec<(PathBuf, PathBuf)> = Vec::new();
+    stack.push((src.to_path_buf(), dst.to_path_buf()));
+    while let Some((current_src, current_dst)) = stack.pop() {
+        if is_symlink(&current_src) {
             continue;
         }
-        let name_lower = e.file_name().to_string_lossy().to_ascii_lowercase();
-        if name_lower == "node_modules" || name_lower.starts_with("cache") || name_lower == "temp" || name_lower == "tmp" {
-            continue;
+        if let Err(e) = fs::create_dir_all(&current_dst) {
+            eprintln!("Warnung: {}", e);
         }
-        if sp.is_dir() {
-            let _ = copy_directory_with_progress(&sp, &dp, app, start, processed, total);
-        } else {
-            let _ = fs::copy(&sp, &dp);
-            *processed = processed.saturating_add(1);
-            emit_progress(app, start, *processed, total, "Sammeln");
+        let it = match fs::read_dir(&current_src) { Ok(i) => i, Err(_) => continue };
+        for entry in it {
+            let entry = match entry { Ok(x) => x, Err(_) => continue };
+            let sp = entry.path();
+            let dp = current_dst.join(entry.file_name());
+            if is_symlink(&sp) || is_reparse_point(&sp) { continue; }
+            let name_lower = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if should_skip_name(&name_lower) {
+                continue;
+            }
+            if sp.is_dir() {
+                stack.push((sp, dp));
+            } else {
+                let _ = fs::copy(&sp, &dp);
+                *processed = processed.saturating_add(1);
+                emit_progress(app, start, *processed, total, "Sammeln");
+            }
         }
     }
     Ok(())
@@ -338,60 +383,81 @@ fn add_dir_to_zip_progress<W: Write + io::Seek>(
     processed: &mut u64,
     total: u64,
 ) -> Result<(), String> {
-    let entries = match fs::read_dir(src_dir) {
-        Ok(i) => i,
-        Err(_) => return Ok(()),
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        if is_symlink(&path) {
-            continue;
-        }
-        // Große oder problematische Ordner überspringen, um Hänger zu vermeiden
-        let fname = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if fname == "node_modules" || fname.starts_with("cache") || fname == "temp" || fname == "tmp" {
-            continue;
-        }
-        let name = entry.file_name();
-        let zip_path = if prefix.is_empty() {
-            name.to_string_lossy().to_string()
-        } else {
-            format!("{}/{}", prefix, name.to_string_lossy())
-        };
-        if path.is_dir() {
-            zip.add_directory(&zip_path, *options)
-                .map_err(|e| format!("Fehler Ordner {}: {}", zip_path, e))?;
-            add_dir_to_zip_progress(zip, &path, &zip_path, options, app, start, processed, total)?;
-        } else {
-            zip.start_file(&zip_path, *options)
-                .map_err(|e| format!("Fehler Datei {}: {}", zip_path, e))?;
-            // Stream-basiertes Kopieren in den ZIP, um RAM zu sparen
-            let mut infile = match fs::File::open(&path) { Ok(f) => f, Err(_) => continue };
-            let mut buffer = [0u8; 1024 * 1024]; // 1MB Buffer
-            loop {
-                match std::io::Read::read(&mut infile, &mut buffer) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        zip.write_all(&buffer[..n])
-                            .map_err(|e| format!("Fehler Schreiben {}: {}", zip_path, e))?;
+    let mut stack: Vec<(PathBuf, String)> = Vec::new();
+    stack.push((src_dir.to_path_buf(), prefix.to_string()));
+    while let Some((current_dir, current_prefix)) = stack.pop() {
+        let entries = match fs::read_dir(&current_dir) { Ok(i) => i, Err(_) => continue };
+        for entry in entries {
+            let entry = match entry { Ok(e) => e, Err(_) => continue };
+            let path = entry.path();
+            if is_symlink(&path) || is_reparse_point(&path) { continue; }
+            let fname = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if should_skip_name(&fname) { continue; }
+            let name = entry.file_name();
+            let zip_path = if current_prefix.is_empty() {
+                name.to_string_lossy().to_string()
+            } else {
+                format!("{}/{}", current_prefix, name.to_string_lossy())
+            };
+            if path.is_dir() {
+                zip.add_directory(&zip_path, *options)
+                    .map_err(|e| format!("Fehler Ordner {}: {}", zip_path, e))?;
+                stack.push((path, zip_path));
+            } else {
+                zip.start_file(&zip_path, *options)
+                    .map_err(|e| format!("Fehler Datei {}: {}", zip_path, e))?;
+                let mut infile = match fs::File::open(&path) { Ok(f) => f, Err(_) => continue };
+                let mut buffer = [0u8; 1024 * 1024];
+                loop {
+                    match std::io::Read::read(&mut infile, &mut buffer) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            zip.write_all(&buffer[..n])
+                                .map_err(|e| format!("Fehler Schreiben {}: {}", zip_path, e))?;
+                        }
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
+                *processed = processed.saturating_add(1);
+                emit_progress(app, start, *processed, total, "Packen");
             }
-            *processed = processed.saturating_add(1);
-            emit_progress(app, start, *processed, total, "Packen");
         }
     }
     Ok(())
 }
 
-async fn encrypt_file(zip_path: &Path, output_path: &Path, password: &str) -> Result<(), String> {
-    let zip_data =
-        fs::read(zip_path).map_err(|e| format!("Fehler beim Lesen der ZIP-Datei: {}", e))?;
+async fn encrypt_file(
+    zip_path: &Path,
+    output_path: &Path,
+    password: &str,
+    app: &tauri::AppHandle,
+    start: Instant,
+    processed: &mut u64,
+    total_ops: u64,
+) -> Result<(), String> {
+    // Datei größenbasiert einlesen und Fortschritt melden (max. 99%)
+    let meta = fs::metadata(zip_path)
+        .map_err(|e| format!("Fehler beim Lesen der ZIP-Metadaten: {}", e))?;
+    let total_size = meta.len();
+    let mut file = fs::File::open(zip_path)
+        .map_err(|e| format!("Fehler beim Öffnen der ZIP-Datei: {}", e))?;
+    let mut zip_data: Vec<u8> = Vec::with_capacity(total_size as usize);
+    let mut buffer = [0u8; 1024 * 1024];
+    let mut read_bytes: u64 = 0;
+    let base_percent = if total_ops == 0 { 0.0 } else { (*processed as f32 / total_ops as f32) * 100.0 };
+    loop {
+        match std::io::Read::read(&mut file, &mut buffer) {
+            Ok(0) => break,
+            Ok(n) => {
+                zip_data.extend_from_slice(&buffer[..n]);
+                read_bytes += n as u64;
+                let frac = if total_size == 0 { 1.0 } else { read_bytes as f32 / total_size as f32 };
+                let p = base_percent + (99.0 - base_percent).max(0.0) * frac;
+                emit_progress_percent(app, start, p.min(99.0), "Verschlüsseln");
+            }
+            Err(e) => return Err(format!("Fehler beim Lesen der ZIP-Datei: {}", e)),
+        }
+    }
     let mut key = [0u8; 32];
     let password_bytes = password.as_bytes();
     for (i, &byte) in password_bytes.iter().enumerate() {

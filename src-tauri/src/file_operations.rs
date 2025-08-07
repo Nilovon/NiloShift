@@ -38,7 +38,7 @@ pub async fn select_export_path(
     let result = Arc::new(Mutex::new(None::<Option<String>>));
     let result_clone = Arc::clone(&result);
 
-    let mut builder = app
+    let builder = app
         .dialog()
         .file()
         .set_title("Ziel für Export auswählen")

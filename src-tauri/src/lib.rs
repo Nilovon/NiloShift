@@ -20,10 +20,12 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(target_os = "windows")]
+    // Elevation nur in Release-Builds anfordern (Dev würde sonst beendet werden)
+    #[cfg(all(target_os = "windows", not(debug_assertions)))]
     ensure_elevated();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
