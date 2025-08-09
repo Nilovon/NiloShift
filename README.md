@@ -2,8 +2,6 @@
 
 **The Ultimate Windows Profile Migration Tool** ✨
 
-![NiloShift Logo](public/icon.png)
-
 NiloShift is a powerful and user-friendly desktop application that enables seamless migration of Windows user profiles between different computers. Whether you're upgrading to a new machine or need to backup your essential data, NiloShift makes the process effortless! 💻➡️💻
 
 ## ✨ Features
