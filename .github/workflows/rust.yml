@@ -1,8 +1,9 @@
-name: Rust
+name: Build and Release NiloShift
 
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -11,10 +12,90 @@ env:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [windows-latest]
+        
+    runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: latest
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+
+    - name: Install dependencies
+      run: pnpm install
+
+    - name: Build application
       run: pnpm run build
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: niloshift-${{ matrix.os }}
+        path: |
+          src-tauri/target/release/niloshift.exe
+          src-tauri/target/release/bundle/msi/*.msi
+        retention-days: 30
+
+  release:
+    needs: build
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: niloshift-windows-latest
+        path: ./artifacts
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ./artifacts/src-tauri/target/release/niloshift.exe
+          ./artifacts/src-tauri/target/release/bundle/msi/*.msi
+        name: NiloShift ${{ github.ref_name }}
+        body: |
+          ## 🚀 NiloShift ${{ github.ref_name }}
+          
+          ### 📥 Downloads
+          - **niloshift.exe** - Standalone executable
+          - **NiloShift-*.msi** - Windows installer package
+          
+          ### 🔧 Installation
+          1. Download the MSI installer for easy setup
+          2. Or download the standalone EXE file
+          3. Run as Administrator for full functionality
+          
+          ### 📋 System Requirements
+          - Windows 10 (1903) or later
+          - Administrator rights recommended
+          
+          ### 🆕 What's New
+          See the commit history for detailed changes.
+          
+          ---
+          **Made with ❤️ by Nilovon**
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
