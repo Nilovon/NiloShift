@@ -11,29 +11,16 @@ Welcome to the comprehensive documentation for NiloShift! This wiki will guide y
 ### 🏃‍♂️ **Getting Started**
 - [Installation Guide](Installation-Guide) - Download and install NiloShift
 - [Quick Start Tutorial](Quick-Start-Tutorial) - Get up and running in 5 minutes
-- [System Requirements](System-Requirements) - Check if your system is compatible
 
 ### 📖 **User Guides**
 - [How to Export Profiles](Export-Guide) - Step-by-step export process
 - [How to Import Profiles](Import-Guide) - Complete import walkthrough
-- [Selective Migration](Selective-Migration) - Choose exactly what to migrate
-- [Security Features](Security-Features) - Understanding encryption and safety
 
 ### 🔧 **Advanced Topics**
-- [Technical Details](Technical-Details) - Under the hood information
 - [Troubleshooting](Troubleshooting) - Common issues and solutions
-- [File Format Specification](File-Format) - Understanding `.nilo` files
-- [Performance Optimization](Performance-Tips) - Tips for faster migrations
-
-### 💼 **For Developers**
-- [Building from Source](Building-from-Source) - Compile NiloShift yourself
-- [Contributing Guidelines](Contributing) - Help improve NiloShift
-- [API Documentation](API-Documentation) - Technical reference
 
 ### 📞 **Support & Community**
 - [FAQ](FAQ) - Frequently asked questions
-- [Known Issues](Known-Issues) - Current limitations
-- [Contact Support](Contact-Support) - Get help when you need it
 
 ## 🎯 What Can NiloShift Do?
 
