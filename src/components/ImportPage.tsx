@@ -15,7 +15,18 @@ function ImportPage() {
   const [profiles, setProfiles] = useState<string[]>([]);
   const [selectedUser, setSelectedUser] = useState('');
   const [progress, setProgress] = useState<{percent:number, eta_ms:number, phase:string}>({percent:0, eta_ms:0, phase:'Idle'});
-  const [detected, setDetected] = useState<{desktop:boolean;documents:boolean;pictures:boolean;downloads:boolean;chrome:boolean;edge:boolean;firefox:boolean} | null>(null);
+  const [detected, setDetected] = useState<{desktop:boolean;documents:boolean;pictures:boolean;downloads:boolean;chrome:boolean;edge:boolean;firefox:boolean;outlook_signatures:boolean} | null>(null);
+  const [selectedItems, setSelectedItems] = useState<{desktop:boolean;documents:boolean;pictures:boolean;downloads:boolean;chrome:boolean;edge:boolean;firefox:boolean;outlook_signatures:boolean}>({
+    desktop: true,
+    documents: true,
+    pictures: true,
+    downloads: true,
+    chrome: true,
+    edge: true,
+    firefox: true,
+    outlook_signatures: true
+  });
+  const [isDetecting, setIsDetecting] = useState(false);
 
   useEffect(() => {
     const unlistenPromise = listen<any>('import-progress', async (e) => {
@@ -50,21 +61,63 @@ function ImportPage() {
       if (result) {
         setSelectedFile(result as string);
         setMessage('');
-        // Falls Passwort schon eingegeben: Inhalte automatisch erkennen
-        try {
-          if (password) {
-            const info = await invoke<{desktop:boolean;documents:boolean;pictures:boolean;downloads:boolean;chrome:boolean;edge:boolean;firefox:boolean}>(
-              'detect_package_contents',
-              { packagePath: result as string, password }
-            );
-            setDetected(info);
-          }
-        } catch (e) {
-          console.warn('Detect failed:', e);
-        }
+        // Setze detected zurück wenn neue Datei gewählt wird
+        setDetected(null);
       }
     } catch (error) {
       setMessage(`Fehler beim Dateiwählen: ${error}`);
+    }
+  };
+
+  const detectContents = async (filePath: string, pwd: string) => {
+    if (isDetecting) return; // Verhindere mehrfache gleichzeitige Aufrufe
+    if (!pwd || pwd.length < 1) return; // Mindestens 1 Zeichen erforderlich
+    
+    setIsDetecting(true);
+    setMessage('');
+    
+    // Timeout nach 30 Sekunden für große Dateien
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Timeout: Detection dauerte zu lange (>30s)')), 30000);
+    });
+    
+    try {
+      const info = await Promise.race([
+        invoke<{desktop:boolean;documents:boolean;pictures:boolean;downloads:boolean;chrome:boolean;edge:boolean;firefox:boolean;outlook_signatures:boolean}>(
+          'detect_package_contents',
+          { packagePath: filePath, password: pwd }
+        ),
+        timeoutPromise
+      ]);
+      
+      setDetected(info);
+      setMessage('Paket-Inhalte erfolgreich erkannt!');
+    } catch (e) {
+      console.error('Detect failed:', e);
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      
+      if (errorMsg.includes('Entschlüsselung fehlgeschlagen') || errorMsg.includes('decrypt')) {
+        setMessage('Falsches Passwort oder beschädigte Datei.');
+        setDetected(null);
+      } else if (errorMsg.includes('Timeout')) {
+        setMessage('Detection dauerte zu lange. Bitte versuchen Sie es erneut.');
+        setDetected(null);
+      } else {
+        // Setze Standard-Werte als Fallback
+        setDetected({
+          desktop: true,
+          documents: true,
+          pictures: true,
+          downloads: true,
+          chrome: true,
+          edge: true,
+          firefox: true,
+          outlook_signatures: true
+        });
+        setMessage(`Automatische Erkennung fehlgeschlagen. Alle Optionen werden angezeigt. (${errorMsg})`);
+      }
+    } finally {
+      setIsDetecting(false);
     }
   };
 
@@ -81,6 +134,17 @@ function ImportPage() {
       setMessage('Bitte gib das Passwort ein.');
       return;
     }
+    if (!detected) {
+      setMessage('Bitte lade zuerst die Paket-Inhalte.');
+      return;
+    }
+    
+    // Prüfe, ob mindestens ein Element ausgewählt ist
+    const hasSelection = Object.values(selectedItems).some(value => value);
+    if (!hasSelection) {
+      setMessage('Bitte wähle mindestens ein Element zum Importieren aus.');
+      return;
+    }
 
     setIsLoading(true);
     setMessage('');
@@ -91,6 +155,7 @@ function ImportPage() {
         packagePath: selectedFile,
         password: password,
         selectedUser: selectedUser,
+        selectedItems: selectedItems,
       });
       setProgress({percent:100, eta_ms:0, phase:'Fertig'});
     let permissionGranted = await isPermissionGranted();
@@ -189,19 +254,212 @@ function ImportPage() {
             <input id="import-password" type="password" value={password} onChange={async (e) => {
               const val = e.target.value;
               setPassword(val);
-              // Wenn Datei vorhanden: Inhalte erkennen
-              try {
-                if (selectedFile && val) {
-                  const info = await invoke<{desktop:boolean;documents:boolean;pictures:boolean;downloads:boolean;chrome:boolean;edge:boolean;firefox:boolean}>(
-                    'detect_package_contents',
-                    { packagePath: selectedFile, password: val }
-                  );
-                  setDetected(info);
-                }
-              } catch {}
+              // Entferne automatische Erkennung - nur manuell per Button
+              // Setze detected zurück wenn Passwort geändert wird
+              if (detected) {
+                setDetected(null);
+              }
             }} placeholder="Passwort zum Entschlüsseln eingeben" className="linear-input w-full" disabled={isLoading} />
+            {selectedFile && password && !detected && !isDetecting && (
+              <div className="flex gap-2 mt-2">
+                <button 
+                  onClick={() => detectContents(selectedFile, password)}
+                  className="linear-button-secondary text-sm"
+                >
+                  Inhalte laden
+                </button>
+                <button 
+                  onClick={() => {
+                    setDetected({
+                      desktop: true,
+                      documents: true,
+                      pictures: true,
+                      downloads: true,
+                      chrome: true,
+                      edge: true,
+                      firefox: true,
+                      outlook_signatures: true
+                    });
+                    setMessage('Automatische Erkennung übersprungen. Alle Optionen verfügbar.');
+                  }}
+                  className="linear-button-secondary text-sm"
+                >
+                  Erkennung überspringen
+                </button>
+              </div>
+            )}
+            {isDetecting && (
+              <div className="flex items-center gap-2 mt-2 text-sm linear-text-muted">
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Erkenne Paket-Inhalte...
+              </div>
+            )}
           </div>
         </div>
+
+        {/* Message display */}
+        {message && !isLoading && (
+          <div className={`px-4 py-3 rounded-md text-sm max-w-2xl mt-4 ${
+            message.includes('Fehler') ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 
+            message.includes('Hinweis') ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' :
+            'bg-green-500/10 text-green-400 border border-green-500/20'
+          }`}>
+            {message}
+          </div>
+        )}
+
+        {/* Selection Section */}
+        {detected && (
+          <div className="flex flex-col gap-4 mt-6">
+            <h2 className="text-lg font-semibold text-white">Zu importierende Inhalte auswählen</h2>
+            <div className="linear-card p-4">
+              <div className="grid grid-cols-3 gap-4">
+                {/* Ordner-Auswahl */}
+                <div>
+                  <h3 className="text-sm font-medium linear-text-primary mb-3">Ordner</h3>
+                  <div className="space-y-2">
+                    {detected.desktop && (
+                      <label className="flex items-center gap-2 cursor-pointer hover:linear-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={selectedItems.desktop}
+                          onChange={(e) => setSelectedItems({...selectedItems, desktop: e.target.checked})}
+                          className="w-4 h-4 rounded border-[#484f58] bg-[#0d1117] text-[#059669] focus:ring-[#059669] focus:ring-offset-0 focus:ring-2"
+                        />
+                        <span className="text-sm linear-text-secondary">Desktop</span>
+                      </label>
+                    )}
+                    {detected.documents && (
+                      <label className="flex items-center gap-2 cursor-pointer hover:linear-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={selectedItems.documents}
+                          onChange={(e) => setSelectedItems({...selectedItems, documents: e.target.checked})}
+                          className="w-4 h-4 rounded border-[#484f58] bg-[#0d1117] text-[#059669] focus:ring-[#059669] focus:ring-offset-0 focus:ring-2"
+                        />
+                        <span className="text-sm linear-text-secondary">Dokumente</span>
+                      </label>
+                    )}
+                    {detected.pictures && (
+                      <label className="flex items-center gap-2 cursor-pointer hover:linear-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={selectedItems.pictures}
+                          onChange={(e) => setSelectedItems({...selectedItems, pictures: e.target.checked})}
+                          className="w-4 h-4 rounded border-[#484f58] bg-[#0d1117] text-[#059669] focus:ring-[#059669] focus:ring-offset-0 focus:ring-2"
+                        />
+                        <span className="text-sm linear-text-secondary">Bilder</span>
+                      </label>
+                    )}
+                    {detected.downloads && (
+                      <label className="flex items-center gap-2 cursor-pointer hover:linear-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={selectedItems.downloads}
+                          onChange={(e) => setSelectedItems({...selectedItems, downloads: e.target.checked})}
+                          className="w-4 h-4 rounded border-[#484f58] bg-[#0d1117] text-[#059669] focus:ring-[#059669] focus:ring-offset-0 focus:ring-2"
+                        />
+                        <span className="text-sm linear-text-secondary">Downloads</span>
+                      </label>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Browser-Auswahl */}
+                <div>
+                  <h3 className="text-sm font-medium linear-text-primary mb-3">Browser-Daten</h3>
+                  <div className="space-y-2">
+                    {detected.chrome && (
+                      <label className="flex items-center gap-2 cursor-pointer hover:linear-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={selectedItems.chrome}
+                          onChange={(e) => setSelectedItems({...selectedItems, chrome: e.target.checked})}
+                          className="w-4 h-4 rounded border-[#484f58] bg-[#0d1117] text-[#059669] focus:ring-[#059669] focus:ring-offset-0 focus:ring-2"
+                        />
+                        <span className="text-sm linear-text-secondary">Google Chrome</span>
+                      </label>
+                    )}
+                    {detected.edge && (
+                      <label className="flex items-center gap-2 cursor-pointer hover:linear-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={selectedItems.edge}
+                          onChange={(e) => setSelectedItems({...selectedItems, edge: e.target.checked})}
+                          className="w-4 h-4 rounded border-[#484f58] bg-[#0d1117] text-[#059669] focus:ring-[#059669] focus:ring-offset-0 focus:ring-2"
+                        />
+                        <span className="text-sm linear-text-secondary">Microsoft Edge</span>
+                      </label>
+                    )}
+                    {detected.firefox && (
+                      <label className="flex items-center gap-2 cursor-pointer hover:linear-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={selectedItems.firefox}
+                          onChange={(e) => setSelectedItems({...selectedItems, firefox: e.target.checked})}
+                          className="w-4 h-4 rounded border-[#484f58] bg-[#0d1117] text-[#059669] focus:ring-[#059669] focus:ring-offset-0 focus:ring-2"
+                        />
+                        <span className="text-sm linear-text-secondary">Mozilla Firefox</span>
+                      </label>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Microsoft Office-Auswahl */}
+                <div>
+                  <h3 className="text-sm font-medium linear-text-primary mb-3">Microsoft Office</h3>
+                  <div className="space-y-2">
+                    {detected.outlook_signatures && (
+                      <label className="flex items-center gap-2 cursor-pointer hover:linear-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={selectedItems.outlook_signatures}
+                          onChange={(e) => setSelectedItems({...selectedItems, outlook_signatures: e.target.checked})}
+                          className="w-4 h-4 rounded border-[#484f58] bg-[#0d1117] text-[#059669] focus:ring-[#059669] focus:ring-offset-0 focus:ring-2"
+                        />
+                        <span className="text-sm linear-text-secondary">Outlook-Signaturen</span>
+                      </label>
+                    )}
+                  </div>
+                </div>
+              </div>
+              
+              {/* Alle/Keine auswählen Buttons */}
+              <div className="flex gap-2 mt-4 pt-4 border-t linear-border">
+                <button
+                  onClick={() => setSelectedItems({
+                    desktop: detected.desktop,
+                    documents: detected.documents,
+                    pictures: detected.pictures,
+                    downloads: detected.downloads,
+                    chrome: detected.chrome,
+                    edge: detected.edge,
+                    firefox: detected.firefox,
+                    outlook_signatures: detected.outlook_signatures
+                  })}
+                  className="text-xs linear-button-secondary"
+                >
+                  Alle auswählen
+                </button>
+                <button
+                  onClick={() => setSelectedItems({
+                    desktop: false,
+                    documents: false,
+                    pictures: false,
+                    downloads: false,
+                    chrome: false,
+                    edge: false,
+                    firefox: false,
+                    outlook_signatures: false
+                  })}
+                  className="text-xs linear-button-secondary"
+                >
+                  Keine auswählen
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Import Progress */}
         {(isLoading || progress.percent > 0) && (
@@ -229,11 +487,11 @@ function ImportPage() {
                 detected.chrome && 'Chrome',
                 detected.edge && 'Edge',
                 detected.firefox && 'Firefox',
+                detected.outlook_signatures && 'Outlook-Signaturen',
               ].filter(Boolean).join(', ') || 'Keine Inhalte erkannt'}</span>
             </div>
           )}
-          {message && (<div className={`px-4 py-3 rounded-md text-sm max-w-md ${message.includes('Fehler') ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-green-500/10 text-green-400 border border-green-500/20'}`}>{message}</div>)}
-          <button className={`linear-button-primary flex items-center gap-2 ${isLoading || !selectedFile || !password ? 'opacity-50 cursor-not-allowed' : ''}`} onClick={handleImport} disabled={isLoading || !selectedFile || !password}>
+          <button className={`linear-button-primary flex items-center gap-2 ${isLoading || !selectedFile || !password || !detected || !Object.values(selectedItems).some(v => v) ? 'opacity-50 cursor-not-allowed' : ''}`} onClick={handleImport} disabled={isLoading || !selectedFile || !password || !detected || !Object.values(selectedItems).some(v => v)}>
             {isLoading ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Import läuft...</>) : (<><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 18L10 5M10 18L6 14M10 18L14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M18 6V4C18 2.89543 17.1046 2 16 2H4C2.89543 2 2 2.89543 2 4V6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>Import starten</>)}
           </button>
         </div>

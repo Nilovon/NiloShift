@@ -23,6 +23,7 @@ pub struct ExportOptions {
    pub chrome: bool,
    pub edge: bool,
    pub firefox: bool,
+   pub outlook_signatures: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -119,6 +120,9 @@ pub async fn start_export_command(
    if options.firefox {
        total_files += count_dir_files(&user_base.join("AppData/Roaming/Mozilla/Firefox"));
    }
+   if options.outlook_signatures {
+       total_files += count_dir_files(&user_base.join("AppData/Roaming/Microsoft/Signatures"));
+   }
 
    // Wir zählen Dateien für Copy und Zip -> Faktor 2
    let total_ops = total_files.saturating_mul(2).saturating_add(1); // +1 für Encrypt
@@ -202,6 +206,19 @@ pub async fn start_export_command(
            copy_directory_with_progress(
                &p,
                &temp_dir.join("AppData/Roaming/Mozilla/Firefox"),
+               &app,
+               start,
+               &mut processed,
+               total_ops,
+           )?;
+       }
+   }
+   if options.outlook_signatures {
+       let p = appdata.join("Roaming/Microsoft/Signatures");
+       if p.exists() {
+           copy_directory_with_progress(
+               &p,
+               &temp_dir.join("AppData/Roaming/Microsoft/Signatures"),
                &app,
                start,
                &mut processed,

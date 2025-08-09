@@ -15,6 +15,7 @@ interface ExportOptions {
   chrome: boolean;
   edge: boolean;
   firefox: boolean;
+  outlook_signatures: boolean;
 }
 
 function ExportPage() {
@@ -29,6 +30,7 @@ function ExportPage() {
     chrome: true,
     edge: false,
     firefox: false,
+    outlook_signatures: false,
   });
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -343,6 +345,18 @@ function ExportPage() {
                   description="Lesezeichen, Passwörter, Verlauf"
                 />
               )}
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-lg font-medium linear-text-primary mb-4">Microsoft Office</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <OptionCard
+                option="outlook_signatures"
+                icon="📧"
+                title="Outlook-Signaturen"
+                description="E-Mail-Signaturen und Vorlagen"
+              />
             </div>
           </div>
 
